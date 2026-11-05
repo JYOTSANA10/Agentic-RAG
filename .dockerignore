@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+packages/*/node_modules
+packages/*/dist
+packages/backend/prisma/*.db
+packages/backend/prisma/*.db-journal
+packages/backend/uploads/*
+.git
+.env
+packages/backend/.env
+

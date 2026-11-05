@@ -1,0 +1,16 @@
+{
+  "name": "enterprise-it-copilot",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/backend",
+    "packages/frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev --workspace=packages/backend",
+    "dev:frontend": "npm run dev --workspace=packages/frontend",
+    "install:all": "npm install",
+    "build": "npm run build --workspaces"
+  }
+}
+
