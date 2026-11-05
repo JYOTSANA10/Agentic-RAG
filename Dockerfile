@@ -19,10 +19,9 @@ RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 COPY .npmrc ./
 COPY package*.json ./
 COPY packages/backend/package*.json ./packages/backend/
-# Install with exact versions (prisma pinned to 5.x in package.json)
 RUN npm install --workspace=packages/backend --legacy-peer-deps
 COPY packages/backend ./packages/backend
-# Use LOCAL binary — avoids npx downloading latest Prisma (v7) from npm
+# Use LOCAL pinned prisma binary (5.22.0) — avoids npx pulling latest v7
 RUN /app/node_modules/.bin/prisma generate --schema /app/packages/backend/prisma/schema.prisma
 RUN npm run build --workspace=packages/backend
 
@@ -37,21 +36,26 @@ RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 COPY .npmrc ./
 COPY package*.json ./
 COPY packages/backend/package*.json ./packages/backend/
-# Install production deps (prisma pinned to 5.22.0 — no v7 drift)
+
+# Install production dependencies only (NODE_ENV=production skips devDeps by default)
 RUN npm install --workspace=packages/backend --legacy-peer-deps
 
-# Copy Prisma schema & scripts
+# Copy Prisma schema & helper scripts
 COPY packages/backend/prisma ./packages/backend/prisma
 COPY packages/backend/scripts ./packages/backend/scripts
 
-# Copy compiled artifacts from builders
+# Copy compiled backend & built frontend from builder stages
 COPY --from=backend-builder /app/packages/backend/dist ./packages/backend/dist
 COPY --from=frontend-builder /app/packages/frontend/dist ./packages/frontend/dist
 
-# Generate Prisma Client using the pinned LOCAL binary (not npx)
-RUN /app/node_modules/.bin/prisma generate --schema /app/packages/backend/prisma/schema.prisma
+# Copy the already-generated Prisma client + CLI binary from backend-builder
+# (prisma CLI is a devDep — not installed in production runner — reuse builder output)
+COPY --from=backend-builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=backend-builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
+COPY --from=backend-builder /app/node_modules/prisma ./node_modules/prisma
+COPY --from=backend-builder /app/node_modules/.bin/prisma ./node_modules/.bin/prisma
 
 EXPOSE 3001
 
-# Use local prisma binary at startup for db push too
+# Run prisma db push (creates SQLite file) then start the app
 CMD ["sh", "-c", "/app/node_modules/.bin/prisma db push --schema /app/packages/backend/prisma/schema.prisma && node /app/packages/backend/dist/index.js"]
