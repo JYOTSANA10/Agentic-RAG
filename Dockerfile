@@ -52,5 +52,12 @@ COPY --from=frontend-builder /app/packages/frontend/dist ./packages/frontend/dis
 
 EXPOSE 3001
 
-# Push DB schema on first boot (creates/migrates SQLite), then start app
-CMD ["sh", "-c", "/app/node_modules/.bin/prisma db push --schema /app/packages/backend/prisma/schema.prisma && node /app/packages/backend/dist/index.js"]
+# On every boot:
+#   1. Push DB schema (creates/migrates SQLite — safe to run repeatedly)
+#   2. Auto-create admin from ADMIN_EMAIL / ADMIN_PASSWORD env vars
+#   3. Start the app
+CMD ["sh", "-c", "\
+  /app/node_modules/.bin/prisma db push --schema /app/packages/backend/prisma/schema.prisma && \
+  node /app/packages/backend/scripts/create-admin.mjs && \
+  node /app/packages/backend/dist/index.js \
+"]
