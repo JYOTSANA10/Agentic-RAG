@@ -41,14 +41,14 @@ COPY packages/backend/package*.json ./packages/backend/
 # npm install in NODE_ENV=production installs ALL dependencies
 RUN npm install --workspace=packages/backend --legacy-peer-deps
 
-# Generate prisma client inside this container using its own installed binary
-RUN /app/node_modules/.bin/prisma generate --schema /app/packages/backend/prisma/schema.prisma || true
-
 # Copy schema, scripts, compiled code, and built frontend
 COPY packages/backend/prisma ./packages/backend/prisma
 COPY packages/backend/scripts ./packages/backend/scripts
 COPY --from=backend-builder /app/packages/backend/dist ./packages/backend/dist
 COPY --from=frontend-builder /app/packages/frontend/dist ./packages/frontend/dist
+
+# Generate prisma client inside this container using its own installed binary
+RUN /app/node_modules/.bin/prisma generate --schema /app/packages/backend/prisma/schema.prisma
 
 EXPOSE 3001
 
