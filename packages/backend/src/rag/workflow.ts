@@ -50,7 +50,7 @@ function afterGenerate(state: AgentState): string {
   ) {
     return 'escalation_check';
   }
-  return END;
+  return 'done';
 }
 
 // ── Build + compile the graph ─────────────────────────────────────────────────
@@ -118,11 +118,13 @@ export async function runWorkflow(question: string, allowWebFallback = true): Pr
     fallback: 'fallback',
   });
 
-  // Generator → optional escalation check
+  // Generator → optional escalation check, then done
   graph.addConditionalEdges('generate', afterGenerate, {
     escalation_check: 'escalation_check',
-    [END]: END,
+    done: 'done_node',
   });
+  graph.addNode('done_node', async (state: AgentState) => state); // passthrough to END
+  graph.addEdge('done_node', END);
   graph.addEdge('escalation_check', END);
 
   graph.addEdge('fallback', END);
