@@ -3,15 +3,39 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   MessageSquare, Send, Loader2, Globe, Database, Plus,
   LogOut, Settings, ChevronDown, ChevronUp, ExternalLink,
-  AlertTriangle, LifeBuoy, CheckCircle2
+  AlertTriangle, LifeBuoy, CheckCircle2, Copy, Check,
+  ThumbsUp, ThumbsDown, Clock, Layers, RefreshCw, Tag,
+  Ticket,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useAuthStore } from '../store/auth';
 import {
   sendChat, getConversations, getConversation,
-  type Message, type Conversation, type Citation, type TraceStep,
+  type Message, type Conversation, type Citation, type TraceStep, type IntentType,
 } from '../api/chat';
 
+// ── Intent badge ──────────────────────────────────────────────────────────────
+const INTENT_LABELS: Record<IntentType, { label: string; color: string }> = {
+  greeting:                { label: 'Greeting',           color: 'bg-sky-100 text-sky-700 border-sky-200' },
+  general_conversation:    { label: 'General Chat',       color: 'bg-purple-100 text-purple-700 border-purple-200' },
+  it_support:              { label: 'IT Support',         color: 'bg-blue-100 text-blue-700 border-blue-200' },
+  company_policy:          { label: 'Company Policy',     color: 'bg-green-100 text-green-700 border-green-200' },
+  technical_troubleshooting: { label: 'Technical',       color: 'bg-orange-100 text-orange-700 border-orange-200' },
+  external_information:    { label: 'External Info',      color: 'bg-amber-100 text-amber-700 border-amber-200' },
+  unknown:                 { label: 'Unknown',            color: 'bg-gray-100 text-gray-600 border-gray-200' },
+};
+
+function IntentBadge({ intent }: { intent?: IntentType }) {
+  if (!intent) return null;
+  const cfg = INTENT_LABELS[intent] || INTENT_LABELS.unknown;
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full border font-semibold ${cfg.color}`}>
+      <Tag className="w-2.5 h-2.5" />{cfg.label}
+    </span>
+  );
+}
+
+// ── Source badge ──────────────────────────────────────────────────────────────
 function SourceBadge({ sourceType }: { sourceType?: string }) {
   if (!sourceType || sourceType === 'none') return null;
   if (sourceType === 'web') {
@@ -23,7 +47,7 @@ function SourceBadge({ sourceType }: { sourceType?: string }) {
         <div className="flex items-start gap-1.5 text-[11px] text-amber-800 bg-amber-50/80 rounded-md p-2 border border-amber-200/60 leading-relaxed">
           <AlertTriangle className="w-3.5 h-3.5 text-amber-600 flex-shrink-0 mt-0.5" />
           <span>
-            <strong>External Guidance Notice:</strong> This solution was retrieved from public vendor documentation. Please cross-verify critical system configuration changes with your company IT lead.
+            <strong>External Guidance Notice:</strong> This answer uses public web sources. Cross-verify critical changes with your IT lead.
           </span>
         </div>
       </div>
@@ -31,28 +55,54 @@ function SourceBadge({ sourceType }: { sourceType?: string }) {
   }
   return (
     <span className="inline-flex items-center gap-1.5 text-xs px-2.5 py-0.5 bg-emerald-100 text-emerald-800 font-medium rounded-full border border-emerald-200">
-      <Database className="w-3 h-3 text-emerald-600" /> Internal IT Knowledge Base
+      <Database className="w-3 h-3 text-emerald-600" /> Internal Knowledge Base
     </span>
   );
 }
 
-function CitationsPanel({ citations }: { citations: Citation[] }) {
-  if (!citations?.length) return null;
+// ── Citations panel (deduped) ─────────────────────────────────────────────────
+function CitationsPanel({ citations, sourceType }: { citations: Citation[]; sourceType?: string }) {
+  // Never show citations for non-retrieval responses
+  if (!citations?.length || !sourceType || sourceType === 'none') return null;
+
+  // Deduplicate by source name on the frontend as a safety net
+  const seen = new Set<string>();
+  const unique = citations.filter((c) => {
+    const key = c.id || `${c.source}::${c.excerpt.slice(0, 60)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  if (!unique.length) return null;
+
   return (
     <div className="mt-3 border-t border-gray-100 pt-3">
-      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Sources & References</p>
+      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+        <Layers className="w-3 h-3" /> Sources & References ({unique.length})
+      </p>
       <div className="space-y-2">
-        {citations.slice(0, 3).map((c, i) => (
+        {unique.slice(0, 4).map((c, i) => (
           <div key={i} className="bg-gray-50 rounded-lg p-2.5 text-xs border border-gray-100">
             <div className="flex items-center justify-between mb-1">
               <span className="font-semibold text-gray-700 truncate max-w-xs">{c.source}</span>
-              {c.url && (
-                <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-brand-600 hover:text-brand-700 ml-2 flex-shrink-0 flex items-center gap-0.5 font-medium">
-                  Link <ExternalLink className="w-3 h-3" />
-                </a>
-              )}
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {c.score !== undefined && (
+                  <span className="text-[10px] text-gray-400 font-mono">score: {c.score.toFixed(3)}</span>
+                )}
+                {c.url && (
+                  <a
+                    href={c.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-brand-600 hover:text-brand-700 ml-1 flex items-center gap-0.5 font-medium"
+                  >
+                    Link <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
             </div>
-            <p className="text-gray-600 line-clamp-2 leading-relaxed">{c.excerpt}</p>
+            <p className="text-gray-600 line-clamp-3 leading-relaxed">{c.excerpt}</p>
           </div>
         ))}
       </div>
@@ -60,9 +110,20 @@ function CitationsPanel({ citations }: { citations: Citation[] }) {
   );
 }
 
+// ── Agent trace panel ─────────────────────────────────────────────────────────
+const STEP_STATUS_ICONS: Record<TraceStep['status'], React.ReactNode> = {
+  done:    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />,
+  skipped: <span className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 inline-block" />,
+  running: <Loader2 className="w-3.5 h-3.5 text-brand-600 animate-spin" />,
+  error:   <AlertTriangle className="w-3.5 h-3.5 text-red-500" />,
+};
+
 function TracePanel({ trace }: { trace: TraceStep[] }) {
   const [open, setOpen] = useState(false);
   if (!trace?.length) return null;
+
+  const totalMs = trace.reduce((sum, t) => sum + (t.durationMs ?? 0), 0);
+
   return (
     <div className="mt-2.5">
       <button
@@ -70,18 +131,21 @@ function TracePanel({ trace }: { trace: TraceStep[] }) {
         className="flex items-center gap-1.5 text-xs text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1 rounded-md transition-colors font-medium"
       >
         {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-        Agent Workflow Trace ({trace.length} steps)
+        Agent Trace ({trace.length} steps{totalMs > 0 ? ` · ${totalMs}ms` : ''})
       </button>
       {open && (
         <div className="mt-2.5 bg-gray-50/80 rounded-xl p-3 border border-gray-200 space-y-2">
           {trace.map((t, i) => (
             <div key={i} className="flex items-start gap-2.5 text-xs">
-              <span className="w-5 h-5 rounded-full bg-brand-600 text-white flex items-center justify-center flex-shrink-0 font-bold text-[10px] mt-0.5">
-                {i + 1}
-              </span>
-              <div className="flex-1">
+              <div className="flex-shrink-0 mt-0.5">
+                {STEP_STATUS_ICONS[t.status ?? 'done']}
+              </div>
+              <div className="flex-1 min-w-0">
                 <span className="font-semibold text-gray-800">{t.step}: </span>
                 <span className="text-gray-600">{t.detail}</span>
+                {t.durationMs !== undefined && (
+                  <span className="ml-2 text-[10px] text-gray-400 font-mono">{t.durationMs}ms</span>
+                )}
               </div>
             </div>
           ))}
@@ -91,18 +155,96 @@ function TracePanel({ trace }: { trace: TraceStep[] }) {
   );
 }
 
-function MessageBubble({ message, onEscalate }: { message: Message; onEscalate: (query: string) => void }) {
+// ── Copy button ───────────────────────────────────────────────────────────────
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+      title="Copy answer"
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
+
+// ── Escalation banner ─────────────────────────────────────────────────────────
+const PRIORITY_COLORS = {
+  P1: 'bg-red-600',
+  P2: 'bg-orange-500',
+  P3: 'bg-yellow-500',
+  P4: 'bg-gray-400',
+};
+const PRIORITY_LABELS = {
+  P1: 'P1 – Critical',
+  P2: 'P2 – High',
+  P3: 'P3 – Standard',
+  P4: 'P4 – Low',
+};
+
+function EscalationBanner({
+  message,
+  onEscalate,
+}: {
+  message: Message;
+  onEscalate: (msg: Message) => void;
+}) {
+  const showEscalate =
+    message.sourceType === 'none' ||
+    message.needsEscalation;
+
+  if (!showEscalate) return null;
+
+  const priority = message.escalationPriority ?? 'P3';
+  const priorityColor = PRIORITY_COLORS[priority];
+  const priorityLabel = PRIORITY_LABELS[priority];
+
+  return (
+    <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between gap-3 text-xs">
+      <div className="flex items-center gap-2 text-red-700">
+        <LifeBuoy className="w-4 h-4 text-red-500 flex-shrink-0" />
+        <span>
+          Couldn't resolve automatically? Escalate to IT Support.{' '}
+          <span className={`text-white text-[10px] px-1.5 py-0.5 rounded font-bold ${priorityColor}`}>
+            {priorityLabel}
+          </span>
+        </span>
+      </div>
+      <button
+        onClick={() => onEscalate(message)}
+        className="bg-red-600 hover:bg-red-700 text-white font-medium px-3 py-1.5 rounded-lg flex-shrink-0 transition-colors flex items-center gap-1.5"
+      >
+        <Ticket className="w-3.5 h-3.5" /> Create IT Ticket
+      </button>
+    </div>
+  );
+}
+
+// ── Message bubble ────────────────────────────────────────────────────────────
+function MessageBubble({
+  message,
+  onEscalate,
+}: {
+  message: Message;
+  onEscalate: (msg: Message) => void;
+}) {
   const isUser = message.role === 'user';
-  const isFallback = !isUser && message.sourceType === 'none';
 
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-5`}>
       <div className="max-w-[82%]">
-        <div className={`rounded-2xl px-4 py-3.5 ${
-          isUser
-            ? 'bg-brand-600 text-white rounded-tr-sm shadow-sm'
-            : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm shadow-sm'
-        }`}>
+        <div
+          className={`rounded-2xl px-4 py-3.5 ${
+            isUser
+              ? 'bg-brand-600 text-white rounded-tr-sm shadow-sm'
+              : 'bg-white border border-gray-200 text-gray-800 rounded-tl-sm shadow-sm'
+          }`}
+        >
           {isUser ? (
             <p className="text-sm">{message.content}</p>
           ) : (
@@ -111,25 +253,26 @@ function MessageBubble({ message, onEscalate }: { message: Message; onEscalate: 
             </div>
           )}
         </div>
+
         {!isUser && (
           <div className="px-2 mt-2 space-y-1.5">
+            {/* Meta row: intent badge + copy + latency */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <IntentBadge intent={message.intent} />
+              <CopyButton text={message.content} />
+            </div>
+
+            {/* Source badge — only for retrieval results */}
             <SourceBadge sourceType={message.sourceType} />
-            <CitationsPanel citations={message.citations} />
+
+            {/* Citations — only when retrieval happened */}
+            <CitationsPanel citations={message.citations} sourceType={message.sourceType} />
+
+            {/* Trace */}
             <TracePanel trace={message.traceSteps} />
-            {isFallback && (
-              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-2 text-red-700">
-                  <LifeBuoy className="w-4 h-4 text-red-500 flex-shrink-0" />
-                  <span>Unresolved automatically? Escalate directly to Tier-2 IT support.</span>
-                </div>
-                <button
-                  onClick={() => onEscalate(message.content)}
-                  className="bg-red-600 hover:bg-red-700 text-white font-medium px-3 py-1.5 rounded-lg flex-shrink-0 transition-colors"
-                >
-                  Create IT Ticket
-                </button>
-              </div>
-            )}
+
+            {/* Escalation banner */}
+            <EscalationBanner message={message} onEscalate={onEscalate} />
           </div>
         )}
       </div>
@@ -137,13 +280,15 @@ function MessageBubble({ message, onEscalate }: { message: Message; onEscalate: 
   );
 }
 
+// ── Sample questions ──────────────────────────────────────────────────────────
 const SAMPLE_QUESTIONS = [
-  'How do I connect to the company VPN from home?',
-  'What is the annual leave allowance and carry-forward policy?',
-  'How do I set up Multi-Factor Authentication (MFA)?',
-  'What is the latest Microsoft Teams / Azure outage status?',
+  'Is MFA mandatory for all employees?',
+  'What is the annual leave carry-forward policy?',
+  'How do I set up the company VPN from home?',
+  'What is the latest Microsoft Teams service status?',
 ];
 
+// ── Main page ─────────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
@@ -206,8 +351,11 @@ export default function ChatPage() {
           role: 'assistant',
           content: result.answer,
           sourceType: result.sourceType,
+          intent: result.intent,
           citations: result.citations,
           traceSteps: result.trace,
+          needsEscalation: result.needsEscalation,
+          escalationPriority: result.escalationPriority,
           createdAt: new Date().toISOString(),
         },
       ]);
@@ -217,7 +365,7 @@ export default function ChatPage() {
         {
           id: `err-${Date.now()}`,
           role: 'assistant',
-          content: '⚠️ An unexpected error occurred while reaching the AI Copilot. Please check system status or reach out to your administrator.',
+          content: '⚠️ An unexpected error occurred. Please check system status or reach out to your administrator.',
           citations: [],
           traceSteps: [],
           createdAt: new Date().toISOString(),
@@ -229,10 +377,11 @@ export default function ChatPage() {
     }
   }, [input, loading, conversationId, allowWeb, navigate]);
 
-  function handleEscalate(_content: string) {
+  function handleEscalate(msg: Message) {
     const ticketId = `INC-${Math.floor(100000 + Math.random() * 900000)}`;
-    setTicketToast(`Ticket #${ticketId} created and dispatched to IT Help Desk queue with Priority: P2.`);
-    setTimeout(() => setTicketToast(null), 5000);
+    const priority = msg.escalationPriority ?? 'P3';
+    setTicketToast(`Ticket #${ticketId} created · Priority: ${priority} · Dispatched to IT Help Desk.`);
+    setTimeout(() => setTicketToast(null), 6000);
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -246,7 +395,7 @@ export default function ChatPage() {
     <div className="flex h-screen bg-gray-50 overflow-hidden">
       {/* Toast */}
       {ticketToast && (
-        <div className="fixed top-4 right-4 z-50 bg-gray-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm animate-fade-in border border-gray-700">
+        <div className="fixed top-4 right-4 z-50 bg-gray-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm border border-gray-700 max-w-sm">
           <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
           <span>{ticketToast}</span>
         </div>
@@ -260,7 +409,7 @@ export default function ChatPage() {
           </div>
           <div>
             <span className="font-semibold text-sm tracking-tight block">IT Support Copilot</span>
-            <span className="text-[10px] text-brand-300 font-mono">Agentic RAG v1.0</span>
+            <span className="text-[10px] text-brand-300 font-mono">Agentic RAG v2.0</span>
           </div>
         </div>
         <div className="p-3">
@@ -268,7 +417,7 @@ export default function ChatPage() {
             onClick={() => { navigate('/chat'); setMessages([]); }}
             className="w-full flex items-center justify-center gap-2 text-sm bg-brand-700 hover:bg-brand-600 px-3 py-2.5 rounded-xl transition-all shadow-sm font-medium"
           >
-            <Plus className="w-4 h-4" /> New Ticket Chat
+            <Plus className="w-4 h-4" /> New Chat
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-3 space-y-1 scrollbar-thin">
@@ -305,7 +454,7 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* Main Container */}
+      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <div className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3 shadow-xs">
@@ -316,10 +465,10 @@ export default function ChatPage() {
             <h1 className="font-semibold text-gray-900 text-sm flex items-center gap-2">
               Enterprise IT Support Copilot
               <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                LangGraph Powered
+                LangGraph v2 · Intent-Aware
               </span>
             </h1>
-            <p className="text-xs text-gray-500">Self-corrective Agentic RAG with Private KB + Fallback Web Search</p>
+            <p className="text-xs text-gray-500">Agentic RAG · Intent Classification · Self-Correcting Retrieval · Web Fallback</p>
           </div>
           <label className="flex items-center gap-2 text-xs text-gray-600 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200 cursor-pointer select-none">
             <input
@@ -333,7 +482,7 @@ export default function ChatPage() {
           </label>
         </div>
 
-        {/* Message Viewport */}
+        {/* Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-6 scrollbar-thin">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center max-w-xl mx-auto py-8">
@@ -342,16 +491,13 @@ export default function ChatPage() {
               </div>
               <h2 className="text-xl font-bold text-gray-800 mb-2">Welcome to Enterprise IT Copilot</h2>
               <p className="text-sm text-gray-500 mb-6 leading-relaxed">
-                Your AI agent searches internal company runbooks, HR/IT policies, and live vendor status to resolve technical issues autonomously.
+                Ask anything — greetings, IT issues, HR policies, or technical questions. The agent intelligently routes your query to the right source.
               </p>
               <div className="grid gap-2.5 w-full text-left">
                 {SAMPLE_QUESTIONS.map((q) => (
                   <button
                     key={q}
-                    onClick={() => {
-                      setInput(q);
-                      handleSend(q);
-                    }}
+                    onClick={() => handleSend(q)}
                     className="text-left text-sm bg-white border border-gray-200 hover:border-brand-500 hover:bg-brand-50/50 p-3.5 rounded-xl transition-all text-gray-700 shadow-xs flex items-center justify-between group"
                   >
                     <span>{q}</span>
@@ -361,21 +507,23 @@ export default function ChatPage() {
               </div>
             </div>
           )}
+
           {messages.map((m) => (
             <MessageBubble key={m.id} message={m} onEscalate={handleEscalate} />
           ))}
+
           {loading && (
             <div className="flex justify-start mb-4">
               <div className="bg-white border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm flex items-center gap-2.5 text-xs text-gray-500">
                 <Loader2 className="w-4 h-4 text-brand-600 animate-spin" />
-                <span>Agent analyzing query, evaluating knowledge base & routing...</span>
+                <span>Classifying intent and routing query...</span>
               </div>
             </div>
           )}
           <div ref={bottomRef} />
         </div>
 
-        {/* Prompt Input */}
+        {/* Input */}
         <div className="bg-white border-t border-gray-200 p-4">
           <div className="flex items-end gap-3 max-w-4xl mx-auto">
             <textarea
@@ -383,7 +531,7 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Describe your IT issue or question... (Enter to send, Shift+Enter for newline)"
+              placeholder="Ask a question, describe an IT issue, or just say hello... (Enter to send)"
               rows={1}
               disabled={loading}
               className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-60 max-h-40 scrollbar-thin shadow-xs"
@@ -398,6 +546,9 @@ export default function ChatPage() {
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
             </button>
           </div>
+          <p className="text-center text-[10px] text-gray-400 mt-2">
+            Powered by LangGraph · Groq · Pinecone · Tavily — All answers from verified sources only
+          </p>
         </div>
       </div>
     </div>

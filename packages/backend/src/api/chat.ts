@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticateToken, type AuthenticatedRequest } from './middleware/auth';
 import { runWorkflow } from '../rag/workflow';
 import { prisma } from '../services/prisma';
+import type { Citation } from '../rag/state';
 
 export const chatRouter = Router();
 chatRouter.use(authenticateToken);
@@ -31,7 +32,21 @@ chatRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
 
     const result = await runWorkflow(question, allowWebFallback);
     const latencyMs = Date.now() - startTime;
-    const citations = result.sourceType === 'web' ? result.webResults : result.documents;
+
+    // Deduplicate citations by ID or source+excerpt key before persisting
+    const rawCitations: Citation[] = result.sourceType === 'web' ? result.webResults : result.documents;
+    const seen = new Set<string>();
+    const citations = rawCitations.filter((c) => {
+      const key = c.id || `${c.source}::${c.excerpt.slice(0, 60)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // For non-retrieval intents (greeting, chat), store empty citations
+    const finalCitations = (result.intent === 'greeting' || result.intent === 'general_conversation')
+      ? []
+      : citations;
 
     const assistantMsg = await prisma.message.create({
       data: {
@@ -39,13 +54,19 @@ chatRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
         role: 'assistant',
         content: result.answer,
         sourceType: result.sourceType,
-        citations: JSON.stringify(citations),
+        citations: JSON.stringify(finalCitations),
         traceSteps: JSON.stringify(result.trace),
       },
     });
 
     await prisma.auditLog.create({
-      data: { userId, question, sourceType: result.sourceType, latencyMs, retriesUsed: 1 - result.retriesLeft },
+      data: {
+        userId,
+        question,
+        sourceType: result.sourceType,
+        latencyMs,
+        retriesUsed: 1 - result.retriesLeft,
+      },
     });
 
     res.json({
@@ -53,8 +74,11 @@ chatRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
       messageId: assistantMsg.id,
       answer: result.answer,
       sourceType: result.sourceType,
-      citations,
+      intent: result.intent,
+      citations: finalCitations,
       trace: result.trace,
+      needsEscalation: result.needsEscalation,
+      escalationPriority: result.escalationPriority,
       latencyMs,
     });
   } catch (err) {
@@ -87,4 +111,3 @@ chatRouter.get('/conversations/:id', async (req: AuthenticatedRequest, res: Resp
   }));
   res.json({ conversation: { ...conv, messages } });
 });
-
