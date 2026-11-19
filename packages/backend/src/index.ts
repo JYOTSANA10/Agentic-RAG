@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import path from 'path';
 import fs from 'fs';
 import { authRouter } from './api/auth';
@@ -9,6 +10,7 @@ import { chatRouter } from './api/chat';
 import { ingestRouter } from './api/ingest';
 import { documentsRouter } from './api/documents';
 import { auditRouter } from './api/audit';
+import { ticketsRouter } from './api/tickets';
 import { healthRouter } from './api/health';
 import { errorHandler } from './api/middleware/errorHandler';
 import { prisma } from './services/prisma';
@@ -25,13 +27,55 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// ── Rate Limiters ────────────────────────────────────────────────────────────
+
+/** General API: 100 requests per minute */
+const generalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+
+/** Auth endpoints: 10 requests per 15 minutes */
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many authentication attempts, please try again in 15 minutes.' },
+});
+
+/** Chat endpoint: 30 requests per minute */
+const chatLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many chat requests, please slow down.' },
+});
+
+/** Ingest endpoint: 5 requests per minute */
+const ingestLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many ingest requests, please slow down.' },
+});
+
+// Apply general limiter to all /api routes, then per-route limiters
+app.use('/api', generalLimiter);
+
 // API Routes
 app.use('/api/health', healthRouter);
-app.use('/api/auth', authRouter);
-app.use('/api/chat', chatRouter);
-app.use('/api/ingest', ingestRouter);
+app.use('/api/auth', authLimiter, authRouter);
+app.use('/api/chat', chatLimiter, chatRouter);
+app.use('/api/ingest', ingestLimiter, ingestRouter);
 app.use('/api/documents', documentsRouter);
 app.use('/api/audit', auditRouter);
+app.use('/api/tickets', ticketsRouter);
 
 // Serve Frontend SPA in Production / Single-Container mode
 const possibleDistPaths = [

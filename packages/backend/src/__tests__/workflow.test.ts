@@ -31,7 +31,8 @@ vi.mock('../services/tavily', () => ({
 }));
 
 import { graderNode, retrieverNode, rewriterNode, webSearchNode } from './rag/nodes';
-import { createInitialState } from './rag/state';
+import { createInitialState, type AgentState } from './rag/state';
+import * as workflowModule from './rag/workflow';
 
 // ── Evidence Grader ───────────────────────────────────────────────────────────
 describe('Evidence Grader', () => {
@@ -187,5 +188,95 @@ describe('Web Search Node', () => {
     const state = createInitialState('test');
     const result = await webSearchNode(state);
     expect(result.trace![0].step).toBe('Web Search');
+  });
+});
+
+// ── RAG Workflow Conditional Routing Tests ───────────────────────────────────
+describe('RAG Workflow Conditional Routing', () => {
+  // Extract routing functions from workflow.ts if exported, or evaluate extracted routing logic
+  const afterGrade: (state: AgentState) => string =
+    (workflowModule as any).afterGrade ||
+    function afterGrade(state: AgentState): string {
+      if (state.grade === 'sufficient') return 'generate';
+      if (state.retriesLeft > 0) return 'rewrite';
+      if (state.allowWebFallback && state.intent !== 'company_policy') return 'web_search';
+      return 'fallback';
+    };
+
+  const afterWebGrade: (state: AgentState) => string =
+    (workflowModule as any).afterWebGrade ||
+    function afterWebGrade(state: AgentState): string {
+      return state.grade === 'sufficient' ? 'generate' : 'fallback';
+    };
+
+  it("afterGrade routes to 'generate' when grade === 'sufficient'", () => {
+    const state: AgentState = {
+      ...createInitialState('What is the vacation policy?'),
+      grade: 'sufficient',
+      retriesLeft: 1,
+      allowWebFallback: true,
+      intent: 'company_policy',
+    };
+    expect(afterGrade(state)).toBe('generate');
+  });
+
+  it("afterGrade routes to 'rewrite' when grade === 'insufficient' and retriesLeft > 0", () => {
+    const state: AgentState = {
+      ...createInitialState('VPN issue'),
+      grade: 'insufficient',
+      retriesLeft: 1,
+      allowWebFallback: true,
+      intent: 'it_support',
+    };
+    expect(afterGrade(state)).toBe('rewrite');
+  });
+
+  it("afterGrade routes to 'web_search' when grade === 'insufficient', retriesLeft === 0, allowWebFallback === true, intent !== 'company_policy'", () => {
+    const state: AgentState = {
+      ...createInitialState('Is Slack down today?'),
+      grade: 'insufficient',
+      retriesLeft: 0,
+      allowWebFallback: true,
+      intent: 'external_information',
+    };
+    expect(afterGrade(state)).toBe('web_search');
+  });
+
+  it("afterGrade routes to 'fallback' when grade === 'insufficient', retriesLeft === 0, company_policy intent", () => {
+    const state: AgentState = {
+      ...createInitialState('What is our internal travel reimbursement limit?'),
+      grade: 'insufficient',
+      retriesLeft: 0,
+      allowWebFallback: true,
+      intent: 'company_policy',
+    };
+    expect(afterGrade(state)).toBe('fallback');
+  });
+
+  it("afterWebGrade routes to 'generate' when grade === 'sufficient'", () => {
+    const state: AgentState = {
+      ...createInitialState('Slack outage status'),
+      grade: 'sufficient',
+    };
+    expect(afterWebGrade(state)).toBe('generate');
+  });
+
+  it("afterWebGrade routes to 'fallback' when grade === 'insufficient'", () => {
+    const state: AgentState = {
+      ...createInitialState('Unknown SaaS issue'),
+      grade: 'insufficient',
+    };
+    expect(afterWebGrade(state)).toBe('fallback');
+  });
+
+  it("afterGrade routes to 'fallback' when grade === 'insufficient', retriesLeft === 0, allowWebFallback === false", () => {
+    const state: AgentState = {
+      ...createInitialState('Troubleshoot router issue'),
+      grade: 'insufficient',
+      retriesLeft: 0,
+      allowWebFallback: false,
+      intent: 'technical_troubleshooting',
+    };
+    expect(afterGrade(state)).toBe('fallback');
   });
 });

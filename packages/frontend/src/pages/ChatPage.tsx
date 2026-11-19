@@ -13,6 +13,7 @@ import {
   sendChat, getConversations, getConversation,
   type Message, type Conversation, type Citation, type TraceStep, type IntentType,
 } from '../api/chat';
+import { createTicket, getMyTickets, type Ticket as TicketData } from '../api/tickets';
 
 // ── Intent badge ──────────────────────────────────────────────────────────────
 const INTENT_LABELS: Record<IntentType, { label: string; color: string }> = {
@@ -190,13 +191,20 @@ const PRIORITY_LABELS = {
 function EscalationBanner({
   message,
   onEscalate,
+  isLoading,
 }: {
   message: Message;
   onEscalate: (msg: Message) => void;
+  isLoading: boolean;
 }) {
+  // Only show EscalationBanner when:
+  // (message.needsEscalation === true) OR (message.sourceType === 'none' AND (message.intent === 'it_support' OR message.intent === 'technical_troubleshooting'))
   const showEscalate =
-    message.sourceType === 'none' ||
-    message.needsEscalation;
+    message.needsEscalation === true ||
+    (
+      message.sourceType === 'none' &&
+      (message.intent === 'it_support' || message.intent === 'technical_troubleshooting')
+    );
 
   if (!showEscalate) return null;
 
@@ -217,9 +225,11 @@ function EscalationBanner({
       </div>
       <button
         onClick={() => onEscalate(message)}
-        className="bg-red-600 hover:bg-red-700 text-white font-medium px-3 py-1.5 rounded-lg flex-shrink-0 transition-colors flex items-center gap-1.5"
+        disabled={isLoading}
+        className="bg-red-600 hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-medium px-3 py-1.5 rounded-lg flex-shrink-0 transition-colors flex items-center gap-1.5"
       >
-        <Ticket className="w-3.5 h-3.5" /> Create IT Ticket
+        <Ticket className="w-3.5 h-3.5" />
+        {isLoading ? 'Creating...' : 'Create IT Ticket'}
       </button>
     </div>
   );
@@ -229,9 +239,11 @@ function EscalationBanner({
 function MessageBubble({
   message,
   onEscalate,
+  ticketLoading,
 }: {
   message: Message;
   onEscalate: (msg: Message) => void;
+  ticketLoading: Set<string>;
 }) {
   const isUser = message.role === 'user';
 
@@ -272,7 +284,11 @@ function MessageBubble({
             <TracePanel trace={message.traceSteps} />
 
             {/* Escalation banner */}
-            <EscalationBanner message={message} onEscalate={onEscalate} />
+            <EscalationBanner
+              message={message}
+              onEscalate={onEscalate}
+              isLoading={ticketLoading.has(message.id)}
+            />
           </div>
         )}
       </div>
@@ -300,6 +316,10 @@ export default function ChatPage() {
   const [allowWeb, setAllowWeb] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [ticketToast, setTicketToast] = useState<string | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
+  const [ticketLoading, setTicketLoading] = useState<Set<string>>(new Set());
+  const [myTickets, setMyTickets] = useState<TicketData[] | null>(null);
+  const [ticketsLoading, setTicketsLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -359,30 +379,60 @@ export default function ChatPage() {
           createdAt: new Date().toISOString(),
         },
       ]);
-    } catch {
-      setMessages((p) => [
-        ...p,
-        {
-          id: `err-${Date.now()}`,
-          role: 'assistant',
-          content: '⚠️ An unexpected error occurred. Please check system status or reach out to your administrator.',
-          citations: [],
-          traceSteps: [],
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { status?: number } };
+      let errorMsg = '⚠️ An unexpected error occurred. Please try again.';
+      if (axiosErr?.response?.status === 500) {
+        errorMsg = '⚠️ The AI service encountered an error. Please try again in a moment.';
+      } else if (!axiosErr?.response) {
+        errorMsg = '⚠️ Network error. Please check your connection and try again.';
+      }
+      setMessages((p) => [...p, { id: `err-${Date.now()}`, role: 'assistant', content: errorMsg, citations: [], traceSteps: [], createdAt: new Date().toISOString() }]);
     } finally {
       setLoading(false);
       inputRef.current?.focus();
     }
   }, [input, loading, conversationId, allowWeb, navigate]);
 
-  function handleEscalate(msg: Message) {
-    const ticketId = `INC-${Math.floor(100000 + Math.random() * 900000)}`;
-    const priority = msg.escalationPriority ?? 'P3';
-    setTicketToast(`Ticket #${ticketId} created · Priority: ${priority} · Dispatched to IT Help Desk.`);
-    setTimeout(() => setTicketToast(null), 6000);
-  }
+  const handleEscalate = useCallback(async (msg: Message) => {
+    // Prevent double-submission
+    if (ticketLoading.has(msg.id)) return;
+
+    setTicketLoading((prev) => new Set(prev).add(msg.id));
+
+    try {
+      const ticket = await createTicket({
+        question: msg.content,
+        description: `IT issue reported via AI Copilot. Intent: ${msg.intent || 'unknown'}`,
+        priority: msg.escalationPriority || 'P3',
+      });
+      const priority = ticket.priority ?? 'P3';
+      setTicketToast(`Ticket #${ticket.ticketRef} created · Priority: ${priority} · Dispatched to IT Help Desk.`);
+      setTimeout(() => setTicketToast(null), 6000);
+    } catch {
+      setErrorToast('Failed to create ticket. Please try again.');
+      setTimeout(() => setErrorToast(null), 5000);
+    } finally {
+      setTicketLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(msg.id);
+        return next;
+      });
+    }
+  }, [ticketLoading]);
+
+  const handleMyTickets = useCallback(async () => {
+    if (ticketsLoading) return;
+    setTicketsLoading(true);
+    try {
+      const tickets = await getMyTickets();
+      setMyTickets(tickets);
+    } catch {
+      // silently fail — keep existing state
+    } finally {
+      setTicketsLoading(false);
+    }
+  }, [ticketsLoading]);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -391,13 +441,23 @@ export default function ChatPage() {
     }
   }
 
+  const openTicketCount = myTickets?.filter((t) => t.status === 'open').length ?? 0;
+
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      {/* Toast */}
+      {/* Success Toast */}
       {ticketToast && (
         <div className="fixed top-4 right-4 z-50 bg-gray-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm border border-gray-700 max-w-sm">
           <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0" />
           <span>{ticketToast}</span>
+        </div>
+      )}
+
+      {/* Error Toast */}
+      {errorToast && (
+        <div className="fixed top-4 right-4 z-50 bg-red-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 text-sm border border-red-700 max-w-sm">
+          <AlertTriangle className="w-5 h-5 text-red-300 flex-shrink-0" />
+          <span>{errorToast}</span>
         </div>
       )}
 
@@ -437,6 +497,24 @@ export default function ChatPage() {
           ))}
         </div>
         <div className="p-3 border-t border-brand-700 space-y-1">
+          {/* My Tickets section */}
+          <button
+            onClick={handleMyTickets}
+            disabled={ticketsLoading}
+            className="w-full flex items-center gap-2 text-xs text-brand-200 hover:text-white px-3 py-2 rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-60"
+          >
+            <span>🎫 My Tickets</span>
+            {ticketsLoading ? (
+              <span className="ml-auto text-[10px] text-brand-400">Loading...</span>
+            ) : myTickets !== null ? (
+              <span className={`ml-auto text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+                openTicketCount > 0 ? 'bg-red-500 text-white font-bold' : 'text-brand-400'
+              }`}>
+                ({openTicketCount} open)
+              </span>
+            ) : null}
+          </button>
+
           {user?.role === 'admin' && (
             <button
               onClick={() => navigate('/admin')}
@@ -509,7 +587,12 @@ export default function ChatPage() {
           )}
 
           {messages.map((m) => (
-            <MessageBubble key={m.id} message={m} onEscalate={handleEscalate} />
+            <MessageBubble
+              key={m.id}
+              message={m}
+              onEscalate={handleEscalate}
+              ticketLoading={ticketLoading}
+            />
           ))}
 
           {loading && (
@@ -531,7 +614,7 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask a question, describe an IT issue, or just say hello... (Enter to send)"
+              placeholder="Describe your IT issue or ask a question... (Enter to send, Shift+Enter for newline)"
               rows={1}
               disabled={loading}
               className="flex-1 resize-none border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-60 max-h-40 scrollbar-thin shadow-xs"

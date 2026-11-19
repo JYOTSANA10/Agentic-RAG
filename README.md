@@ -9,9 +9,9 @@
 [![Docker](https://img.shields.io/badge/Deployment-Docker_Multi--stage-2496ed.svg?logo=docker)](https://www.docker.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-An enterprise-grade, self-correcting **Agentic Retrieval-Augmented Generation (RAG)** copilot designed to autonomously triage and resolve technical IT support inquiries, runbook tasks, and company policy questions.
+An enterprise-grade, self-correcting **Agentic Retrieval-Augmented Generation (RAG)** copilot designed to autonomously triage, troubleshoot, and resolve technical IT support inquiries, runbook tasks, and company policy questions.
 
-Built entirely with **TypeScript / Node.js + React**, orchestrated with **LangGraph.js**, backed by **Pinecone Serverless Vector Search**, and fortified with **Tavily Web Search Fallback**.
+Built as a full-stack TypeScript solution with **Express.js**, **React (Vite)**, orchestrated by **LangGraph.js**, powered by **Groq (`qwen/qwen3.8-27b`)**, indexed with **Pinecone Serverless Vector Search**, embedded locally via **BGE embeddings (`BAAI/bge-small-en-v1.5`)**, backed by **Tavily Web Search Fallback**, and managed via **Prisma ORM with SQLite**.
 
 ---
 
@@ -20,75 +20,182 @@ Built entirely with **TypeScript / Node.js + React**, orchestrated with **LangGr
 | Capability | Traditional Linear RAG | This Enterprise Agentic Copilot |
 | :--- | :--- | :--- |
 | **Pipeline Flow** | Fixed: Question $\rightarrow$ Search $\rightarrow$ Answer | **Dynamic cyclical state machine** with conditional branching |
-| **Evidence Validation** | ❌ Blindly feeds top-$k$ chunks to the LLM | ✅ **LLM-as-a-Judge grader** scores relevance before generation |
-| **Query Reformulation** | ❌ If search terms fail, output hallucinations | ✅ **Autonomous Query Rewriter** optimizes keywords & retries |
-| **Coverage Gaps** | ❌ Fails on live external cloud/SaaS outages | ✅ **Dynamic Web Search Fallback** (Tavily) with disclaimer |
-| **Failure Handling** | ❌ Generic failure message | ✅ **Automated IT HelpDesk Escalation** (P1–P4 triage) |
-| **Observability** | ❌ Black-box execution | ✅ **Real-time Agent Workflow Trace** exposed to user in UI |
+| **Intent Triage** | ❌ Treats greetings and complex bugs identically | ✅ **Intent Classifier** fast-paths greetings & routes technical queries |
+| **Evidence Validation** | ❌ Blindly feeds top-$k$ chunks to the LLM | ✅ **LLM-as-a-Judge grader** validates relevance before answering |
+| **Query Reformulation** | ❌ If search terms miss, returns hallucinated output | ✅ **Autonomous Query Rewriter** refines keywords & retries |
+| **Coverage Gaps** | ❌ Fails on live external cloud/SaaS outages | ✅ **Dynamic Web Search Fallback** (Tavily) with caution disclaimers |
+| **Failure Handling** | ❌ Generic dead-end error message | ✅ **Real IT HelpDesk Escalation** (`INC-XXXXXX` P1–P4 tickets) |
+| **Observability** | ❌ Black-box execution | ✅ **Real-time Agent Workflow Trace** rendered in UI |
 
 ---
 
-## 🧠 System Architecture & Decision Graph
+## 🧠 LangGraph Workflow Architecture
 
-The agentic pipeline is orchestrated as a state machine using **LangGraph.js**:
+The agentic pipeline is orchestrated as a state machine using **LangGraph.js (`@langchain/langgraph`)**:
+
+```
+                       ┌─────────────────────────┐
+                       │       User Query        │
+                       └────────────┬────────────┘
+                                    │
+                                    ▼
+                       ┌─────────────────────────┐
+                       │    Intent Classifier    │
+                       └──────┬─────┬─────┬──────┘
+                              │     │     │
+            ┌─────────────────┘     │     └─────────────────┐
+            │ greeting/chitchat     │ external_info         │ it_support / company_policy /
+            ▼                       ▼                       │ technical_troubleshooting
+  ┌───────────────────┐   ┌───────────────────┐             ▼
+  │  Direct Response  │   │    Web Search     │   ┌───────────────────┐
+  │   (No Retrieval)  │   │  (Tavily Search)  │   │    Router Node    │
+  └─────────┬─────────┘   └─────────┬─────────┘   └─────────┬─────────┘
+            │                       │                       │
+            │                       ▼                       ▼
+            │             ┌───────────────────┐   ┌───────────────────┐
+            │             │  Web Doc Grader   │   │     Retriever     │
+            │             └──────┬─────┬──────┘   │ (Pinecone Vector) │
+            │      sufficient    │     │          └─────────┬─────────┘
+            │      ┌─────────────┘     │                    │
+            │      │                   │ insufficient       ▼
+            │      │                   │          ┌───────────────────┐
+            │      │                   │          │  Evidence Grader  │
+            │      │                   │          └──────┬─────┬──────┘
+            │      │                   │                 │     │
+            │      │                   │       sufficient│     │ insufficient
+            │      │                   │  ┌──────────────┘     │
+            │      │                   │  │                    │
+            │      │                   │  │         ┌──────────┴──────────┐
+            │      │                   │  │         │  Retries Left > 0?  │
+            │      │                   │  │         └─────┬─────────┬─────┘
+            │      │                   │  │            yes│         │no
+            │      │                   │  │               ▼         ▼
+            │      │                   │  │      ┌──────────────┐ ┌──────────────────────┐
+            │      │                   │  │      │Query Rewriter│ │ Policy intent?       │
+            │      │                   │  │      └──────┬───────┘ ├──────────────────────┤
+            │      │                   │  │             │         │ Yes → Fallback       │
+            │      │                   │  │             ▼         │ No  → Tavily Search  │
+            │      │                   │  │      (Retry Retrieve) └──────────┬───────────┘
+            │      │                   │  │                                  │
+            │      ▼                   │  │                                  ▼
+            │  ┌───────────────────────┴──┴───┐             ┌─────────────────────────┐
+            │  │      Response Generator      │             │      Fallback Node      │
+            │  │ (Grounded Answers + Citations│             │   (Policy Ref / HelpDesk│
+            │  │  + SOURCES_USED filtering)   │             │    Escalation Flag)     │
+            │  └──────────────┬───────────────┘             └────────────┬────────────┘
+            │                 │                                          │
+            │                 ▼                                          │
+            │  ┌──────────────────────────────┐                          │
+            │  │   Escalation Check Node      │                          │
+            │  │ (Triggered for unresolvable  │                          │
+            │  │    IT & technical issues)    │                          │
+            │  └──────────────┬───────────────┘                          │
+            │                 │                                          │
+            │                 ▼                                          │
+            └───────────────► ┴ ◄────────────────────────────────────────┘
+                              │
+                              ▼
+                     [Delivered to User]
+```
+
+### Mermaid Diagram
 
 ```mermaid
 flowchart TD
-    User([👤 Employee Inquires]) --> Router[🧭 1. Router & Triage Node]
-    
-    Router -->|Internal Policy / IT SOP| Retriever[🔍 2. Pinecone Vector Search]
-    
-    Retriever --> Grader{⚖️ 3. LLM Evidence Grader}
-    
-    Grader -->|Sufficient Context| Generator[✍️ 6. Response Generator]
-    Grader -->|Weak / Insufficient| CheckRetries{Retries Left?}
-    
-    CheckRetries -->|Yes| Rewriter[🔄 4. Query Rewriter]
+    User([👤 User Query]) --> Intent[🧭 Intent Classifier]
+
+    Intent -->|greeting / chitchat| Direct[💬 Direct Response]
+    Intent -->|external_information| WebSearch[🌐 Tavily Web Search]
+    Intent -->|it_support / policy / troubleshooting| Router[🔀 Router Node]
+
+    Router --> Retriever[🔍 Pinecone Vector Retriever]
+    Retriever --> Grader{⚖️ Evidence Grader}
+
+    Grader -->|sufficient| Generator[✍️ Response Generator]
+    Grader -->|insufficient & retries > 0| Rewriter[🔄 Query Rewriter]
     Rewriter --> Retriever
-    
-    CheckRetries -->|No| WebSearch[🌐 5. Tavily Web Fallback]
-    WebSearch --> WebGrader{⚖️ 5b. Web Evidence Grader}
-    
-    WebGrader -->|Valid Web Data| Generator
-    WebGrader -->|No Results| Fallback[🚨 7. Escalation & Ticket Fallback]
-    
-    Generator --> Citations[📑 Verified Answer + Source Citations + Trace]
-    Fallback --> HelpDesk[🎟️ Help Desk Escalation P1-P4]
-    
-    Citations --> Complete([✅ Delivered to Employee])
-    HelpDesk --> Complete
+
+    Grader -->|insufficient & no retries & non-policy| WebSearch
+    Grader -->|insufficient & company_policy| Fallback[🚨 Policy Fallback]
+
+    WebSearch --> WebGrader{⚖️ Web Evidence Grader}
+    WebGrader -->|sufficient| Generator
+    WebGrader -->|insufficient| Fallback
+
+    Generator --> EscCheck{🚨 IT Issue with No Evidence?}
+    EscCheck -->|Yes| Escalation[🎟️ IT Escalation Check P1-P4]
+    EscCheck -->|No| Complete([✅ Verified Response + Trace])
+
+    Direct --> Complete
+    Fallback --> Complete
+    Escalation --> Complete
 ```
 
 ---
 
-## ⚙️ Tech Stack & Engineering Decisions
+## ⚙️ Core Technology Stack
 
 | Component | Technology | Rationale |
 | :--- | :--- | :--- |
-| **Orchestration** | **LangGraph.js** (`@langchain/langgraph`) | Provides cyclical graphs, conditional branching, and deterministic state transitions. |
-| **LLM Inference** | **Groq API** (`qwen/qwen3.8-27b`) | Sub-second inference latency, ultra-cost effective for multi-step agent reasoning. |
-| **Vector DB** | **Pinecone Serverless** | Scalable, zero-maintenance cosine similarity index (384 dimensions). |
-| **Embeddings** | **BAAI/bge-small-en-v1.5** via `@xenova/transformers` | Local in-process embeddings (ONNX runtime) — 100% free, zero external API bottlenecks. |
-| **Live Web Fallback** | **Tavily Search API** | Targeted, hallucination-resistant developer/vendor search for cloud outages. |
-| **Backend & API** | **Express.js + TypeScript** | Type-safe REST API with JWT authentication, rate-limiting, and audit logging. |
-| **Database & ORM** | **Prisma ORM + SQLite** | Structured storage for user accounts, chat history, citations, and audit events. |
-| **Frontend UI** | **React 18 + Vite + Tailwind CSS** | Clean enterprise dashboard featuring live trace inspection and ticketing escalations. |
+| **Backend Framework** | **Express.js + TypeScript** | Type-safe REST API, rate-limiting, secure middleware, and static SPA serving. |
+| **Frontend Framework** | **React 18 + Vite + Tailwind CSS** | High-performance dashboard with real-time agent execution trace & incident management. |
+| **Agent Orchestration**| **LangGraph.js** (`@langchain/langgraph`) | Cyclical state graph supporting deterministic edge transitions and autonomous retries. |
+| **LLM Inference** | **Groq API** (`qwen/qwen3.8-27b`) | Sub-second inference latency ideal for multi-step agent reasoning pipelines. |
+| **Vector Database** | **Pinecone Serverless** | 384-dimensional cosine similarity index with isolated namespace partitioning. |
+| **Embeddings** | **BAAI/bge-small-en-v1.5** via `@xenova/transformers` | Local in-process embeddings (ONNX runtime) — 100% free, runs in-memory with zero API cost. |
+| **Live Web Fallback** | **Tavily Search API** | Real-time search for cloud/SaaS outages with security warning disclaimers. |
+| **Database & ORM** | **Prisma ORM + SQLite** | Structured storage for users, chat history, documents, audit logs, and tickets. |
 | **Containerization** | **Docker & Docker Compose** | Multi-stage production container ready for cloud deployment (Render, Railway, VPS). |
 
 ---
 
-## 🚀 Key Features
+## 🔑 Environment Variables Required
 
-* **Self-Corrective RAG Loop:** Evaluates chunk sufficiency; if the retrieval misses, the agent rewrites queries and searches again.
-* **External Source Safeguard:** When answering via live web search (e.g. Microsoft Teams outages), the UI attaches an alert cautioning employees against running unverified commands.
-* **Real-Time Agent Trace:** Every response reveals the exact execution trace steps (`Router` $\rightarrow$ `Retriever` $\rightarrow$ `Grader` $\rightarrow$ `Generator`).
-* **Document Ingestion Engine:** Admins can drag-and-drop enterprise documents (`.pdf`, `.docx`, `.txt`, `.md`), automatically parsed, chunked with overlap, and indexed into Pinecone.
-* **Role-Based Access Control:** Secure JWT authentication separating standard employee chat from the administrative ingestion and audit console.
-* **Human-in-the-Loop Escalation:** When an issue is unresolvable autonomously, employees can create an IT incident ticket dispatched to Tier-2 support.
+Create `packages/backend/.env` using the template below (or copy from `.env.example`):
+
+```bash
+# ==============================================================================
+# Enterprise IT Support Copilot - Environment Configuration
+# ==============================================================================
+
+# ── LLM Provider (Groq API - High Speed Inference) ───────────────────────────
+# Get free API key at: https://console.groq.com/keys
+GROQ_API_KEY=gsk_your_groq_api_key_here
+GROQ_MODEL=qwen/qwen3.8-27b
+
+# ── Local Embeddings (Xenova / BAAI BGE-Small) ────────────────────────────────
+# Uses @xenova/transformers locally (100% free, runs in-process, 384 dimensions)
+HF_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+
+# ── Vector Database (Pinecone Serverless) ─────────────────────────────────────
+# Create free index at: https://app.pinecone.io/ (dimension: 384, metric: Cosine)
+PINECONE_API_KEY=pcsk_your_pinecone_api_key_here
+PINECONE_INDEX_NAME=it-copilot
+PINECONE_NAMESPACE=company-it-kb
+
+# ── Web Search Tool (Tavily Search API) ───────────────────────────────────────
+# Get free API key (1,000 queries/mo) at: https://app.tavily.com/
+TAVILY_API_KEY=tvly-your_tavily_api_key_here
+
+# ── Application Security & Authentication ─────────────────────────────────────
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+JWT_SECRET=your_jwt_secret_minimum_32_characters_long
+ADMIN_API_KEY=your_admin_api_key_secret_here
+
+# ── Auto Admin Setup (used by scripts/create-admin.mjs) ───────────────────────
+ADMIN_EMAIL=admin@company.com
+ADMIN_PASSWORD=AdminPassword123!
+ADMIN_NAME=IT Admin
+
+# ── Server Configuration ──────────────────────────────────────────────────────
+PORT=3001
+NODE_ENV=development
+FRONTEND_URL=http://localhost:5173
+```
 
 ---
 
-## 🛠️ Quick Start & Local Setup
+## 🛠️ Setup Instructions
 
 ### 1. Prerequisites
 - **Node.js 20+** installed
@@ -99,19 +206,18 @@ flowchart TD
 
 ### 2. Clone and Install Dependencies
 ```bash
-git clone https://github.com/<your-username>/Enterprise-IT-Support-Agentic-RAG-Copilot.git
-cd Enterprise-IT-Support-Agentic-RAG-Copilot
+git clone https://github.com/JYOTSANA10/Agentic-RAG.git
+cd Agentic-RAG
 npm install
 ```
 
-### 3. Configure Environment Variables
-Copy `.env.example` to `packages/backend/.env`:
+### 3. Configure Environment
 ```bash
 cp .env.example packages/backend/.env
+# Edit packages/backend/.env with your API keys
 ```
-Fill in your keys in `packages/backend/.env`.
 
-### 4. Initialize Database & Create Admin User
+### 4. Push Database Schema & Create Admin
 ```bash
 cd packages/backend
 npx prisma db push
@@ -119,67 +225,111 @@ ADMIN_EMAIL=admin@company.com ADMIN_PASSWORD=AdminPassword123! node scripts/crea
 cd ../..
 ```
 
-### 5. Run the Application
-In your root terminal:
+### 5. Start the Application
+Run both frontend and backend concurrently in separate terminals:
+
 ```bash
-# Terminal 1: Backend
+# Terminal 1: Backend API (port 3001)
 npm run dev:backend
 
-# Terminal 2: Frontend
+# Terminal 2: Frontend Client (port 5173)
 npm run dev:frontend
 ```
 
 Open **`http://localhost:5173`** in your browser.
 
----
-
-## 🐳 Docker Deployment
-
-Run the complete multi-stage containerized application with a single command:
-
+### 6. Single-Command Docker Deployment
 ```bash
 docker compose up --build -d
 ```
-The full application will be live at `http://localhost:3001`.
-
-Detailed instructions for **Render.com**, **Railway**, and **VPS** deployments are available in [DEPLOYMENT.md](DEPLOYMENT.md).
+The application will be live at `http://localhost:3001`.
 
 ---
 
-## 📂 Project Structure
+## 📡 API Endpoints Reference
 
-```
-├── packages/
-│   ├── backend/
-│   │   ├── prisma/             # Database schema & migrations
-│   │   ├── scripts/            # Seed & admin creation scripts
-│   │   └── src/
-│   │       ├── api/            # Express route controllers & middleware
-│   │       ├── rag/            # LangGraph StateGraph, nodes, and router
-│   │       │   ├── nodes.ts    # Router, Grader, Rewriter, Generator, WebSearch
-│   │       │   ├── state.ts    # AgentState typed interface
-│   │       │   └── workflow.ts # Compiled LangGraph state machine
-│   │       ├── services/       # Pinecone, Groq, Tavily, Local Embeddings
-│   │       └── index.ts        # Express entrypoint & static SPA server
-│   └── frontend/
-│       └── src/
-│           ├── api/            # Typed Axios API clients
-│           ├── pages/          # ChatPage, AdminPage, LoginPage, RegisterPage
-│           ├── store/          # Zustand authentication store
-│           └── App.tsx         # Route definitions
-├── Dockerfile                  # Multi-stage production container
-├── docker-compose.yml          # Single-command Docker Compose stack
-├── DEPLOYMENT.md               # Cloud deployment instructions
-└── LINKEDIN_POST.md            # Ready-to-share portfolio launch post
-```
+### Authentication Endpoints (`/api/auth`)
+*Rate limited: 10 requests per 15 minutes per IP*
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/auth/register` | Public | Register new user account (`email`, `password`, `name`). Returns JWT & profile. |
+| `POST` | `/api/auth/login` | Public | Authenticate user credentials. Returns JWT token. |
+| `GET` | `/api/auth/me` | Authenticated | Retrieve profile details of currently logged-in user. |
+
+### Chat & Copilot Endpoints (`/api/chat`)
+*Rate limited: 30 requests per minute per IP*
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/chat` | Authenticated | Execute agentic RAG query (`question`, optional `conversationId`, `allowWebFallback`). Returns answer, citations, trace steps, and escalation flags. |
+| `GET` | `/api/chat/conversations` | Authenticated | List previous conversations for the authenticated user (paginated, latest 50). |
+| `GET` | `/api/chat/conversations/:id` | Authenticated | Retrieve full conversation thread with stored message history, citations, and traces. |
+
+### Document Ingestion Endpoints (`/api/ingest` & `/api/documents`)
+*Rate limited: 5 requests per minute for ingest*
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/ingest` | Admin only | Multipart upload (`.pdf`, `.docx`, `.txt`, `.md`). Early SHA-256 hash check prevents duplicate processing before chunking and Pinecone upsert. |
+| `GET` | `/api/documents` | Admin only | List all uploaded documents with chunk counts, file sizes, and ingest timestamps. |
+| `DELETE` | `/api/documents/:id` | Admin only | Remove document record from SQLite and delete associated vector chunks from Pinecone. |
+
+### IT Support Ticket Endpoints (`/api/tickets`)
+*Real backend ticketing system with collision-proof `INC-XXXXXX` references*
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/tickets` | Authenticated | Create an IT ticket (`question`, `description`, `priority`: `P1`–`P4`). Auto-generates unique `INC-XXXXXX` reference. |
+| `GET` | `/api/tickets` | Authenticated | List paginated tickets submitted by the authenticated user. |
+| `GET` | `/api/tickets/:id` | Owner / Admin | Retrieve full ticket record including status, priority, and timestamps. |
+| `PATCH` | `/api/tickets/:id/status` | Admin only | Update ticket status (`open`, `in_progress`, `resolved`). |
+
+### System & Audit Endpoints
+*General API rate limited: 100 requests per minute*
+
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/health` | Public | Returns system uptime, version (`2.0.0-agentic-rag-v2`), and dependency health. |
+| `GET` | `/api/audit` | Admin only | View audit trail containing query latencies, token consumption, and retries. |
 
 ---
 
-## 🔒 Security & Compliance
+## 🧪 Testing
 
-- **Zero-Storage Secrets:** API credentials reside strictly in memory or `.env` and are never logged.
-- **Local Embedding Privacy:** Document vectorization executes on-device via `@xenova/transformers`, avoiding sensitive document transmission to external embedding APIs.
-- **Strict Role-Based Middleware:** Document ingestion and audit log viewing are gated behind cryptographic JWT verification and administrator roles.
+The backend test suite is written with **Vitest** with mocked external services (Pinecone, Groq, Tavily, Prisma, JWT):
+
+```bash
+# Run all unit and integration tests
+cd packages/backend
+npx vitest run
+
+# Run tests with verbose output
+npx vitest run --reporter=verbose
+
+# Run specific test file
+npx vitest run src/__tests__/tickets.test.ts
+npx vitest run src/__tests__/auth.test.ts
+npx vitest run src/__tests__/workflow.test.ts
+
+# Run TypeScript compilation check
+npx tsc --noEmit
+```
+
+### Test Suite Overview
+
+- `workflow.test.ts`: Evidence Grader, Retriever, Query Rewriter, Web Search, and RAG Workflow Conditional Routing (`afterGrade`, `afterWebGrade`).
+- `intentClassifier.test.ts`: Keyword fast-path greetings, LLM intent triage, trace step verification, and AgentState defaults.
+- `citations.test.ts`: Citation deduplication, grounded citations extraction (`SOURCES_USED`), hallucination prevention, and fallback escalation.
+- `tickets.test.ts`: Unique `INC-XXXXXX` ticket reference generation, collision-retry handling, priority validation (`P1`–`P4`), and ticket API handlers.
+- `auth.test.ts`: `authenticateToken` 401 status checks on missing tokens, expired tokens, non-existent database users, and `requireAdmin` 403 authorization.
+
+---
+
+## ⚠️ Known Limitations
+
+1. **SQLite Database Concurrency**: SQLite is utilized for zero-setup local deployment and rapid prototyping. It relies on file-level locks; for high-concurrency production deployments with multiple backend replicas, configure Prisma to connect to **PostgreSQL** or **MySQL**.
+2. **Render Free Tier Cold Starts**: Deployments hosted on Render's free tier enter sleep mode after 15 minutes of inactivity. The initial wake-up request can take 30–60 seconds due to server spinning and loading the in-process `@xenova/transformers` model into memory.
 
 ---
 
