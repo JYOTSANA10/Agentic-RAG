@@ -29,9 +29,10 @@ authRouter.post('/register', async (req: Request, res: Response) => {
     });
     const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' });
     res.status(201).json({ token, user });
-  } catch (err) {
+  } catch (err: any) {
     if (err instanceof z.ZodError) { res.status(400).json({ error: 'Validation failed', details: err.errors }); return; }
-    throw err;
+    console.error('Register error:', err?.message || err);
+    res.status(500).json({ error: 'Registration failed' });
   }
 });
 
@@ -44,9 +45,10 @@ authRouter.post('/login', async (req: Request, res: Response) => {
     }
     const token = jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET!, { expiresIn: '7d' });
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
-  } catch (err) {
+  } catch (err: any) {
     if (err instanceof z.ZodError) { res.status(400).json({ error: 'Validation failed', details: err.errors }); return; }
-    throw err;
+    console.error('Login error:', err?.message || err);
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 

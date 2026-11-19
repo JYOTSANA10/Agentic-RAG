@@ -21,6 +21,15 @@ chatRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.userId!;
 
     let convId = conversationId;
+    if (convId) {
+      const existingConv = await prisma.conversation.findFirst({
+        where: { id: convId, userId },
+      });
+      if (!existingConv) {
+        convId = undefined; // Stale or missing conversation id, create a new one
+      }
+    }
+
     if (!convId) {
       const conv = await prisma.conversation.create({
         data: { userId, title: question.slice(0, 60) },

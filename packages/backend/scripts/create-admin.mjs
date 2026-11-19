@@ -19,7 +19,13 @@ async function main() {
     console.log(`✅ User ${email} promoted to admin`);
   } else {
     await prisma.user.create({
-      data: { email, passwordHash: await bcrypt.hash(password, 12), name, role: 'admin' },
+      data: {
+        id: '00000000-0000-4000-a000-000000000001',
+        email,
+        passwordHash: await bcrypt.hash(password, 12),
+        name,
+        role: 'admin',
+      },
     });
     console.log(`✅ Admin user created: ${email}`);
   }
