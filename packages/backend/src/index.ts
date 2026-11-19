@@ -54,6 +54,17 @@ if (frontendDist) {
 
 app.use(errorHandler);
 
+// Prevent process crashes from unhandled async errors
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit — keep the server alive
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ Uncaught Exception:', err);
+  // Don't exit — keep the server alive for other requests
+});
+
 async function start() {
   try {
     await prisma.$connect();

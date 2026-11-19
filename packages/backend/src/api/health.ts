@@ -5,7 +5,7 @@ export const healthRouter = Router();
 healthRouter.get('/', (_req, res) => {
   res.json({
     status: 'ok',
-    version: '2.0.0-agentic-rag-v2',
+    version: '2.1.0-crash-guard',
     timestamp: new Date().toISOString(),
   });
 });

@@ -81,33 +81,47 @@ chatRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
       escalationPriority: result.escalationPriority,
       latencyMs,
     });
-  } catch (err) {
+  } catch (err: any) {
     if (err instanceof z.ZodError) { res.status(400).json({ error: 'Validation failed', details: err.errors }); return; }
-    throw err;
+    console.error('Chat handler error:', err?.message || err);
+    res.status(500).json({
+      error: 'An error occurred while processing your request',
+      message: process.env.NODE_ENV !== 'production' ? err?.message : undefined,
+    });
   }
 });
 
 chatRouter.get('/conversations', async (req: AuthenticatedRequest, res: Response) => {
-  const conversations = await prisma.conversation.findMany({
-    where: { userId: req.userId! },
-    orderBy: { updatedAt: 'desc' },
-    take: 50,
-    select: { id: true, title: true, createdAt: true, updatedAt: true },
-  });
-  res.json({ conversations });
+  try {
+    const conversations = await prisma.conversation.findMany({
+      where: { userId: req.userId! },
+      orderBy: { updatedAt: 'desc' },
+      take: 50,
+      select: { id: true, title: true, createdAt: true, updatedAt: true },
+    });
+    res.json({ conversations });
+  } catch (err: any) {
+    console.error('Get conversations error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to load conversations' });
+  }
 });
 
 chatRouter.get('/conversations/:id', async (req: AuthenticatedRequest, res: Response) => {
-  const convId = req.params.id as string;
-  const conv = await prisma.conversation.findFirst({
-    where: { id: convId, userId: req.userId! },
-    include: { messages: { orderBy: { createdAt: 'asc' } } },
-  });
-  if (!conv) { res.status(404).json({ error: 'Conversation not found' }); return; }
-  const messages = (conv as any).messages.map((m: any) => ({
-    ...m,
-    citations: m.citations ? JSON.parse(m.citations) : [],
-    traceSteps: m.traceSteps ? JSON.parse(m.traceSteps) : [],
-  }));
-  res.json({ conversation: { ...conv, messages } });
+  try {
+    const convId = req.params.id as string;
+    const conv = await prisma.conversation.findFirst({
+      where: { id: convId, userId: req.userId! },
+      include: { messages: { orderBy: { createdAt: 'asc' } } },
+    });
+    if (!conv) { res.status(404).json({ error: 'Conversation not found' }); return; }
+    const messages = (conv as any).messages.map((m: any) => ({
+      ...m,
+      citations: m.citations ? JSON.parse(m.citations) : [],
+      traceSteps: m.traceSteps ? JSON.parse(m.traceSteps) : [],
+    }));
+    res.json({ conversation: { ...conv, messages } });
+  } catch (err: any) {
+    console.error('Get conversation error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to load conversation' });
+  }
 });
