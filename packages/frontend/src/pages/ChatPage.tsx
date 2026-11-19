@@ -5,7 +5,7 @@ import {
   LogOut, Settings, ChevronDown, ChevronUp, ExternalLink,
   AlertTriangle, LifeBuoy, CheckCircle2, Copy, Check,
   ThumbsUp, ThumbsDown, Clock, Layers, RefreshCw, Tag,
-  Ticket,
+  Ticket, X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useAuthStore } from '../store/auth';
@@ -320,11 +320,13 @@ export default function ChatPage() {
   const [ticketLoading, setTicketLoading] = useState<Set<string>>(new Set());
   const [myTickets, setMyTickets] = useState<TicketData[] | null>(null);
   const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [showTicketsModal, setShowTicketsModal] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     getConversations().then(setConversations).catch(console.error);
+    getMyTickets().then(setMyTickets).catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -409,6 +411,8 @@ export default function ChatPage() {
       const priority = ticket.priority ?? 'P3';
       setTicketToast(`Ticket #${ticket.ticketRef} created · Priority: ${priority} · Dispatched to IT Help Desk.`);
       setTimeout(() => setTicketToast(null), 6000);
+      // Refresh tickets list so badge and modal update immediately
+      getMyTickets().then(setMyTickets).catch(() => {});
     } catch {
       setErrorToast('Failed to create ticket. Please try again.');
       setTimeout(() => setErrorToast(null), 5000);
@@ -422,7 +426,7 @@ export default function ChatPage() {
   }, [ticketLoading]);
 
   const handleMyTickets = useCallback(async () => {
-    if (ticketsLoading) return;
+    setShowTicketsModal(true);
     setTicketsLoading(true);
     try {
       const tickets = await getMyTickets();
@@ -432,7 +436,7 @@ export default function ChatPage() {
     } finally {
       setTicketsLoading(false);
     }
-  }, [ticketsLoading]);
+  }, []);
 
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -634,6 +638,112 @@ export default function ChatPage() {
           </p>
         </div>
       </div>
+
+      {/* Tickets Modal */}
+      {showTicketsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+              <div className="flex items-center gap-2">
+                <Ticket className="w-5 h-5 text-brand-600" />
+                <h3 className="font-semibold text-gray-900 text-sm">My Support Tickets</h3>
+                {myTickets && (
+                  <span className="text-[11px] bg-brand-50 text-brand-700 px-2 py-0.5 rounded-full font-medium">
+                    {myTickets.length} Total
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => setShowTicketsModal(false)}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {ticketsLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 text-gray-400 text-xs">
+                  <Loader2 className="w-6 h-6 text-brand-600 animate-spin mb-2" />
+                  <span>Loading your tickets...</span>
+                </div>
+              ) : !myTickets || myTickets.length === 0 ? (
+                <div className="text-center py-12 px-4">
+                  <LifeBuoy className="w-10 h-10 text-gray-300 mx-auto mb-2.5" />
+                  <p className="text-sm font-semibold text-gray-700 mb-1">No Tickets Created Yet</p>
+                  <p className="text-xs text-gray-500 max-w-sm mx-auto leading-relaxed">
+                    When you report an IT issue in chat that requires human support or cannot be resolved from documents, click the <strong>Create IT Ticket</strong> button to submit a ticket.
+                  </p>
+                </div>
+              ) : (
+                myTickets.map((t) => {
+                  const priColor =
+                    t.priority === 'P1'
+                      ? 'bg-red-50 text-red-700 border-red-200'
+                      : t.priority === 'P2'
+                      ? 'bg-orange-50 text-orange-700 border-orange-200'
+                      : t.priority === 'P3'
+                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                      : 'bg-gray-50 text-gray-700 border-gray-200';
+
+                  const statusColor =
+                    t.status === 'open'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : t.status === 'in_progress'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200'
+                      : 'bg-gray-50 text-gray-600 border-gray-200';
+
+                  return (
+                    <div
+                      key={t.id}
+                      className="p-3.5 bg-white border border-gray-200 rounded-xl hover:border-gray-300 transition-colors shadow-xs"
+                    >
+                      <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-bold text-gray-900">
+                            #{t.ticketRef}
+                          </span>
+                          <span
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${priColor}`}
+                          >
+                            {t.priority}
+                          </span>
+                          <span
+                            className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${statusColor}`}
+                          >
+                            {t.status.replace('_', ' ').toUpperCase()}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-gray-400">
+                          {new Date(t.createdAt).toLocaleString(undefined, {
+                            dateStyle: 'medium',
+                            timeStyle: 'short',
+                          })}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-700 font-medium line-clamp-2">
+                        {t.question}
+                      </p>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-gray-100 bg-gray-50/50 flex justify-end">
+              <button
+                onClick={() => setShowTicketsModal(false)}
+                className="px-3.5 py-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 text-xs font-medium rounded-lg transition-colors shadow-xs"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

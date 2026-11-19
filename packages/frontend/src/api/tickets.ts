@@ -3,6 +3,8 @@ import api from './client';
 export interface Ticket {
   id: string;
   ticketRef: string;
+  question?: string;
+  description?: string;
   priority: 'P1' | 'P2' | 'P3' | 'P4';
   status: 'open' | 'in_progress' | 'resolved';
   createdAt: string;
