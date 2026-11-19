@@ -42,6 +42,16 @@ export function hashContent(text: string): string {
   return crypto.createHash('sha256').update(text).digest('hex');
 }
 
+/**
+ * Computes SHA-256 hash of extracted text from a file without generating
+ * embeddings or upserting to Pinecone. Used for early duplicate detection.
+ */
+export async function computeContentHash(filePath: string, originalName?: string): Promise<string> {
+  const name = originalName || path.basename(filePath);
+  const text = await extractText(filePath, name);
+  return hashContent(text);
+}
+
 export async function ingestDocument(
   filePath: string,
   originalName: string,

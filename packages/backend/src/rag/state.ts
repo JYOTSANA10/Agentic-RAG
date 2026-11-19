@@ -37,6 +37,8 @@ export interface AgentState {
   allowWebFallback: boolean;
   needsEscalation: boolean;
   escalationPriority: 'P1' | 'P2' | 'P3' | 'P4' | null;
+  /** Number of times the query has been rewritten (for retry-guard logic) */
+  rewriteCount: number;
 }
 
 export function createInitialState(question: string, allowWebFallback = true): AgentState {
@@ -54,5 +56,6 @@ export function createInitialState(question: string, allowWebFallback = true): A
     allowWebFallback,
     needsEscalation: false,
     escalationPriority: null,
+    rewriteCount: 0,
   };
 }

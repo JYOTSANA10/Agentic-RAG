@@ -17,7 +17,7 @@ import {
 // ── Routing functions ─────────────────────────────────────────────────────────
 
 /** After intent classification: direct response or retrieval path */
-function afterIntent(state: AgentState): string {
+export function afterIntent(state: AgentState): string {
   const { intent } = state;
   if (intent === 'greeting' || intent === 'general_conversation' || intent === 'unknown') {
     return 'direct_response';
@@ -30,22 +30,28 @@ function afterIntent(state: AgentState): string {
 }
 
 /** After grading internal docs */
-function afterGrade(state: AgentState): string {
+export function afterGrade(state: AgentState): string {
   if (state.grade === 'sufficient') return 'generate';
   if (state.retriesLeft > 0) return 'rewrite';
-  if (state.allowWebFallback && state.intent !== 'company_policy') return 'web_search';
+  if (state.retriesLeft <= 0 && (state.rewriteCount ?? 0) >= 2) return 'fallback';
+  if (state.intent === 'company_policy') return 'fallback';
+  if (state.allowWebFallback) return 'web_search';
   return 'fallback';
 }
 
 /** After grading web results */
-function afterWebGrade(state: AgentState): string {
+export function afterWebGrade(state: AgentState): string {
   return state.grade === 'sufficient' ? 'generate' : 'fallback';
 }
 
-/** After generating an answer: check if escalation needed for IT issues */
-function afterGenerate(state: AgentState): string {
+/** After generating an answer: check if escalation needed for IT issues.
+ *  Task 1 fix: use evidence absence (no docs AND no webResults) rather than
+ *  sourceType === 'none', because generatorNode always upgrades sourceType to
+ *  'internal' even when no good evidence was found. */
+export function afterGenerate(state: AgentState): string {
+  const hasNoEvidence = state.documents.length === 0 && state.webResults.length === 0;
   if (
-    state.sourceType === 'none' &&
+    hasNoEvidence &&
     (state.intent === 'it_support' || state.intent === 'technical_troubleshooting')
   ) {
     return 'escalation_check';
@@ -71,6 +77,7 @@ export async function runWorkflow(question: string, allowWebFallback = true): Pr
       allowWebFallback:    { value: (_x: boolean, y: boolean) => y ?? _x, default: () => true },
       needsEscalation:     { value: (_x: boolean, y: boolean) => y ?? _x, default: () => false },
       escalationPriority:  { value: (_x: any,     y: any)     => y ?? _x, default: () => null },
+      rewriteCount:        { value: (_x: number,  y: number)  => y ?? _x, default: () => 0 },
     },
   });
 

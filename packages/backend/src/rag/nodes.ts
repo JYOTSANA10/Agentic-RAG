@@ -247,6 +247,7 @@ Rephrased:`
   return {
     rewrittenQuery,
     retriesLeft: state.retriesLeft - 1,
+    rewriteCount: (state.rewriteCount ?? 0) + 1,
     trace: addTrace(state, 'Query Rewriter', `Rewritten: "${rewrittenQuery}"`, 'done', start),
   };
 }
@@ -341,6 +342,9 @@ STRICT RULES:
 - Structure your response clearly using markdown: use **bold** for key terms, bullet lists for steps.
 - If the context is from internal documents, do not add disclaimers about verifying with web sources.
 ${isWeb ? '- Note at the end that this answer uses external web sources and should be verified with internal IT.\n' : ''}
+After your answer, on a NEW LINE, write exactly:
+SOURCES_USED: <comma-separated list of source numbers you actually used, e.g. 1,3>
+If you used no sources, write: SOURCES_USED: none
 
 Question: ${state.question}
 
@@ -350,15 +354,39 @@ ${context}
 Answer:`
   );
 
-  // Citation validation: only return citations for which we actually used the source
-  const finalCitations = dedupedCitations;
+  const rawContent = response.content.toString().trim();
+  let answer = rawContent;
+  let finalCitations = dedupedCitations;
+
+  const match = rawContent.match(/SOURCES_USED:\s*([^\n\r]+)/i);
+  if (match) {
+    // Strip the SOURCES_USED line from the displayed answer
+    answer = rawContent.replace(/\n?SOURCES_USED:\s*[^\n\r]+/gi, '').trim();
+    const sourceStr = match[1].trim().toLowerCase();
+    if (sourceStr === 'none' || sourceStr === '') {
+      finalCitations = [];
+    } else {
+      const indices = (sourceStr.match(/\d+/g) || [])
+        .map(Number)
+        .map((n) => n - 1)
+        .filter((idx) => idx >= 0 && idx < dedupedCitations.length);
+      const uniqueIndices = Array.from(new Set(indices));
+      finalCitations = uniqueIndices.map((idx) => dedupedCitations[idx]);
+    }
+  }
 
   return {
-    answer: response.content.toString().trim(),
+    answer,
     documents: isWeb ? state.documents : finalCitations,
     webResults: isWeb ? finalCitations : state.webResults,
     sourceType: state.sourceType === 'none' ? 'internal' : state.sourceType,
-    trace: addTrace(state, 'Generator', `Answer generated from ${isWeb ? 'web' : 'internal'} sources (${dedupedCitations.length} unique sources)`, 'done', start),
+    trace: addTrace(
+      state,
+      'Generator',
+      `Answer generated from ${isWeb ? 'web' : 'internal'} sources (${finalCitations.length} cited of ${dedupedCitations.length} unique sources)`,
+      'done',
+      start
+    ),
   };
 }
 
@@ -401,7 +429,41 @@ Issue: ${state.question}`
 export async function fallbackNode(state: AgentState): Promise<Partial<AgentState>> {
   const start = Date.now();
   const webSearched = state.webResults.length > 0;
-  const answer = `I wasn't able to find sufficient information to answer: **"${state.question}"**
+  const isITSupport = state.intent === 'it_support';
+  const isTechTroubleshoot = state.intent === 'technical_troubleshooting';
+  const isCompanyPolicy = state.intent === 'company_policy';
+  const shouldEscalate = isITSupport || isTechTroubleshoot;
+
+  let answer = '';
+  if (isCompanyPolicy) {
+    answer = `I wasn't able to find the relevant company policy for: **"${state.question}"** in the knowledge base.
+
+${webSearched ? 'I checked both internal policy documents and company resources, but could not find matching documentation.' : 'I searched our internal policy documents, but could not locate official guidelines on this topic.'}
+
+**Recommended next steps:**
+- 📋 Check the official **Employee Handbook** or company intranet
+- 🏢 Contact the **People Operations / HR team** directly
+- 💬 Reach out to your manager or People Partner for policy clarification`;
+  } else if (isITSupport) {
+    answer = `I couldn't find a solution in the IT knowledge base for your issue: **"${state.question}"**.
+
+${webSearched ? 'I searched internal IT articles and external support resources, but could not resolve this.' : 'I searched our internal IT support articles, but could not find matching troubleshooting steps.'}
+
+**What you can do:**
+- 🎫 **Submit an IT support ticket** using the escalation button below (Priority: P3)
+- 📧 Email **IT Help Desk** directly for assistance
+- 📞 For urgent workstation or system outages, contact the IT emergency line`;
+  } else if (isTechTroubleshoot) {
+    answer = `I was unable to find technical troubleshooting instructions for: **"${state.question}"**.
+
+${webSearched ? 'I checked our technical knowledge base and public technical documentation without finding a verified solution.' : 'I searched our internal runbooks and technical guides, but found no matching procedure.'}
+
+**Recommended next steps:**
+- 🎫 **Escalate to Engineering / IT Support** via the ticket option below (Priority: P3)
+- 🔍 Check internal engineering runbooks and system status dashboards
+- 💬 Ask in the relevant technical support channel`;
+  } else {
+    answer = `I wasn't able to find sufficient information to answer: **"${state.question}"**
 
 ${webSearched ? 'I searched both the internal knowledge base and public web sources, but ' : 'I searched the internal knowledge base but '} couldn't find matching policies or instructions.
 
@@ -412,10 +474,21 @@ ${webSearched ? 'I searched both the internal knowledge base and public web sour
 - 🎫 Submit a **support ticket** using the escalation button below
 
 *Note: If this is an urgent issue, please call the IT support hotline directly.*`;
+  }
 
   return {
     answer,
     sourceType: 'none',
-    trace: addTrace(state, 'Fallback', 'No sufficient evidence found from any source', 'done', start),
+    needsEscalation: shouldEscalate ? true : state.needsEscalation,
+    escalationPriority: shouldEscalate ? (state.escalationPriority || 'P3') : state.escalationPriority,
+    trace: addTrace(
+      state,
+      'Fallback',
+      shouldEscalate
+        ? `Fallback response generated for ${state.intent} (escalation: P3)`
+        : `Fallback response generated for ${state.intent}`,
+      'done',
+      start
+    ),
   };
 }
